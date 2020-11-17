@@ -5,124 +5,59 @@ Created on Tue Nov 10 15:59:30 2020
 @author: marlon.cruz
 """
 
-import cv2
-# import os
-# import sys
-import numpy
-import matplotlib.pyplot as plt
-from modulos import image_enhance
-# from skimage.morphology import skeletonize, thin
 
-# 
-# os.chdir("/app/")
-# 
+import numpy as np;
+import cv2;
+from scipy import ndimage;
+from scipy import signal
 
-def removedot(invertThin):
-    temp0 = numpy.array(invertThin[:])
-    temp0 = numpy.array(temp0)
-    temp1 = temp0/255
-    temp2 = numpy.array(temp1)
-
-    filter0 = numpy.zeros((10,10))
-    W,H = temp0.shape[:2]
-    filtersize = 6
-
-    for i in range(W - filtersize):
-        for j in range(H - filtersize):
-            filter0 = temp1[i:i + filtersize,j:j + filtersize]
-
-            flag = 0
-            if sum(filter0[:,0]) == 0:
-                flag +=1
-            if sum(filter0[:,filtersize - 1]) == 0:
-                flag +=1
-            if sum(filter0[0,:]) == 0:
-                flag +=1
-            if sum(filter0[filtersize - 1,:]) == 0:
-                flag +=1
-            if flag > 3:
-                temp2[i:i + filtersize, j:j + filtersize] = numpy.zeros((filtersize, filtersize))
-
-    return temp2
-
-
-def get_descriptors(img):
-	clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-	img = clahe.apply(img)
-	img = image_enhance.image_enhance(img)
-	img = numpy.array(img, dtype=numpy)
-	
+def ridge_orient(im, gradientsigma, blocksigma, orientsmoothsigma):
+    rows,cols = im.shape;
     
-	ret, img = cv2.threshold(img, 127, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)
-	
+    #calcular gradiente da imagem
+    sze = np.fix(6*gradientsigma);
+    if np.remainder(sze,2) == 0:
+        sze = sze+1;
+        
+    gauss = cv2.getGaussianKernel(np.int(sze),gradientsigma);
+    f = gauss * gauss.T;
     
-	img[img == 255] = 1
-
-	
-	skeleton = cv2.skeletonize(img)
-	skeleton = numpy.array(skeleton, dtype=numpy.uint8)
-	skeleton = removedot(skeleton)
+    fy,fx = np.gradient(f);     
+    
+    #Gx = ndimage.convolve(np.double(im),fx);
+    #Gy = ndimage.convolve(np.double(im),fy);
+    
+    Gx = signal.convolve2d(im,fx,mode='same');    
+    Gy = signal.convolve2d(im,fy,mode='same');
+    
+    Gxx = np.power(Gx,2);
+    Gyy = np.power(Gy,2);
+    Gxy = Gx*Gy;
+    
+    sze = np.fix(6*blocksigma);
+    
+    gauss = cv2.getGaussianKernel(np.int(sze),blocksigma);
+    f = gauss * gauss.T;
+    
+    Gxx = ndimage.convolve(Gxx,f);
+    Gyy = ndimage.convolve(Gyy,f);
+    Gxy = 2*ndimage.convolve(Gxy,f);
     
     
-	harris_corners = cv2.cornerHarris(img, 3, 3, 0.04)
-	harris_normalized = cv2.normalize(harris_corners, 0, 255, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_32FC1)
-	threshold_harris = 125
-	# Extrair keypoints
-	keypoints = []
-	for x in range(0, harris_normalized.shape[0]):
-		for y in range(0, harris_normalized.shape[1]):
-			if harris_normalized[x][y] > threshold_harris:
-				keypoints.append(cv2.KeyPoint(y, x, 1))
-	# Define descriptor
-	orb = cv2.ORB_create()
-	
-	_, des = orb.compute(img, keypoints)
-	return (keypoints, des);
-
-
-def main():
+    denom = np.sqrt(np.power(Gxy,2) + np.power((Gxx - Gyy),2)) + np.finfo(float).eps;
     
-    img1 = '101_1.tif'
+    sin2theta = Gxy/denom;
+    cos2theta = (Gxx-Gyy)/denom;
     
-    #nome_img = sys.argv[1]
-    imagem1 = cv2.imread("repos_img/" + img1, cv2.IMREAD_GRAYSCALE)
-    kp1, des1 = get_descriptors(imagem1)
-
-
-    img2 = '102_1.tif'
-# 	nome_img = sys.argv[2]
-    imagem2 = cv2.imread("database/" + img2, cv2.IMREAD_GRAYSCALE)
-    kp2, des2 = get_descriptors(imagem2)
-
-
-    # Realizar match entre as descrições 
-    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
-    matches = sorted(bf.match(des1, des2), key= lambda match:match.distance)
-	# Plot keypoints
-    img4 = cv2.drawKeypoints(imagem1, kp1, outImage=None)
-    img5 = cv2.drawKeypoints(imagem2, kp2, outImage=None)
-    f, axarr = plt.subplots(1,2)
-    axarr[0].imshow(img4)
-    axarr[1].imshow(img5)
-    plt.show()
-	# Plot matches
-    imagem3 = cv2.drawMatches(imagem1, kp1, imagem2, kp2, matches, flags=2, outImg=None)
-    plt.imshow(imagem3)
-    plt.show()
-
-# 	verificar score de match
-    score = 0;
-    for match in matches:
-        score += match.distance
-    score_threshold = 33
-    if score/len(matches) < score_threshold:
-        print("Fingerprint matches.")
-    else:
-        print("Fingerprint does not match.")
-
-
-if __name__ == "__main__":
-	try:
-		main()
-	except:
-		raise
+    
+    if orientsmoothsigma:
+        sze = np.fix(6*orientsmoothsigma);
+        if np.remainder(sze,2) == 0:
+            sze = sze+1;    
+        gauss = cv2.getGaussianKernel(np.int(sze),orientsmoothsigma);
+        f = gauss * gauss.T;
+        cos2theta = ndimage.convolve(cos2theta,f); 
+        sin2theta = ndimage.convolve(sin2theta,f); 
+    
+    orientim = np.pi/2 + np.arctan2(sin2theta,cos2theta)/2;
+    return(orientim);
